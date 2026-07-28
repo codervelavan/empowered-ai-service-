@@ -47,7 +47,7 @@ async def github_report(username: str | None) -> dict:
             response = await client.get(f"https://api.github.com/users/{username}", headers=headers)
             response.raise_for_status()
             data = response.json()
-        return {"source_status": "available", "summary": f"{data.get('public_repos', 0)} public repositories", "strengths": [], "risks": [], "recommendations": [], "score": None}
+        return {"source_status": "verified", "summary": f"{data.get('public_repos', 0)} public repositories", "strengths": [], "risks": [], "recommendations": [], "score": None}
     except Exception:
         return _unavailable("GitHub", "source lookup failed")
 
@@ -59,7 +59,7 @@ async def specialist_reports(request: CandidateEvaluationRequest) -> dict[str, d
         asyncio.sleep(0, result=_unavailable("LeetCode", "source adapter unavailable")),
     )
     reports = {"github": github, "linkedin": linkedin, "leetcode": leetcode}
-    reports["resume"] = _unavailable("Résumé", "resumeText not supplied") if not request.resumeText else {"source_status": "available", "summary": request.resumeText[:3000], "strengths": [], "risks": [], "recommendations": [], "score": None}
+    reports["resume"] = _unavailable("Résumé", "resumeText not supplied") if not request.resumeText else {"source_status": "verified", "summary": request.resumeText[:3000], "strengths": [], "risks": [], "recommendations": [], "score": None}
     return reports
 
 
@@ -83,7 +83,7 @@ async def evaluate_candidate(request: CandidateEvaluationRequest) -> dict:
     if settings().ai_provider == "fake":
         return {"run_id": request.runId or hashlib.sha256(request.candidateId.encode()).hexdigest()[:24], "candidate_id": request.candidateId, **_fake_candidate(request), "source_reports": {}}
     reports = await specialist_reports(request)
-    enrichable = [name for name, report in reports.items() if report.get("source_status") == "available"]
+    enrichable = [name for name, report in reports.items() if report.get("source_status") == "verified"]
     if enrichable:
         enriched = await asyncio.gather(*[
             asyncio.to_thread(

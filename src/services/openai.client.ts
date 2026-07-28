@@ -8,7 +8,13 @@ function getClient(): OpenAI {
     if (!env.openai.apiKey) {
       throw new Error('OPENAI_API_KEY is not set');
     }
-    client = new OpenAI({ apiKey: env.openai.apiKey });
+    client = new OpenAI({
+      apiKey: env.openai.apiKey,
+      // Only pass baseURL when configured, so the SDK keeps its own default
+      // for OpenAI proper. Set it to route through an OpenAI-compatible
+      // gateway such as OpenRouter.
+      ...(env.openai.baseUrl ? { baseURL: env.openai.baseUrl } : {}),
+    });
   }
   return client;
 }

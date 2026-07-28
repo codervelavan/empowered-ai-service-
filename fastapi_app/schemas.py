@@ -37,7 +37,11 @@ class CandidateDossier(BaseModel):
 
 class SpecialistReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    source_status: Literal["available", "unavailable"]
+    # Must match the Portal's source_status DB enum exactly (db/schema.sql):
+    # verified | partial | unavailable. "available" (the prior value here)
+    # isn't a member -- every enriched specialist report failed
+    # ai_evaluation_reports' enum constraint until this was caught live.
+    source_status: Literal["verified", "partial", "unavailable"]
     summary: str = Field(default="", max_length=5000)
     strengths: list[str] = Field(default_factory=list, max_length=20)
     risks: list[str] = Field(default_factory=list, max_length=20)

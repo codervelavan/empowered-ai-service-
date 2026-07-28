@@ -18,6 +18,11 @@ export const env = {
 
   openai: {
     apiKey: process.env.OPENAI_API_KEY ?? '',
+    // Any OpenAI-compatible endpoint. Leave unset for OpenAI itself; set to
+    // https://openrouter.ai/api/v1 to route through OpenRouter (whose keys
+    // start `sk-or-v1-`). Model ids differ per provider — OpenRouter needs
+    // the `vendor/model` form, e.g. `google/gemma-4-26b-a4b-it:free`.
+    baseUrl: process.env.OPENAI_BASE_URL ?? '',
     model: process.env.OPENAI_MODEL ?? 'gpt-4o-mini',
     // Only the final consolidated report uses this; falls back to `model`.
     consolidationModel: process.env.OPENAI_CONSOLIDATION_MODEL ?? process.env.OPENAI_MODEL ?? 'gpt-4o',
