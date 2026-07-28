@@ -1,0 +1,52 @@
+services:
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - ai-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.fastapi
+    env_file: .env.local
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports: ["8000:8000"]
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 768M
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.fastapi
+    env_file: .env.local
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: ["celery", "-A", "fastapi_app.tasks.celery_app", "worker", "--loglevel=INFO"]
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+volumes:
+  ai-redis:
