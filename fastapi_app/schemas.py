@@ -24,6 +24,21 @@ class ExamEvaluationRequest(BaseModel):
     score: NonNegativeFloat = Field(le=100)
 
 
+class VerificationFlag(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    # "github_handle_invalid" is set deterministically in Python (evaluation.py)
+    # from the actual GitHub API response, never by the model. Everything else
+    # (e.g. "cgpa_mismatch", "college_mismatch") is model-derived from
+    # cross-checking the claimed fields against résumé text and is advisory —
+    # never used to gate admission or enrollment. See VERIFICATION FLAGS in
+    # evaluation.py's system prompt for what "confident" means here.
+    code: str = Field(min_length=1, max_length=60)
+    severity: Literal["info", "warning", "critical"]
+    claimed: str = Field(default="", max_length=240)
+    observed: str = Field(default="", max_length=240)
+    detail: str = Field(default="", max_length=500)
+
+
 class CandidateDossier(BaseModel):
     model_config = ConfigDict(extra="forbid")
     overall_score: NonNegativeFloat = Field(le=100)
@@ -33,6 +48,16 @@ class CandidateDossier(BaseModel):
     top_strengths: list[str] = Field(default_factory=list, max_length=20)
     top_concerns: list[str] = Field(default_factory=list, max_length=20)
     recommended_roles: list[str] = Field(default_factory=list, max_length=20)
+    verification_flags: list[VerificationFlag] = Field(default_factory=list, max_length=20)
+    # Cross-source category scores shown on the Portal's Candidate Deep-Dive
+    # "Technical" tab. Deliberately no salary_expectation_fit_score field —
+    # the registration form no longer collects any salary expectation, so
+    # there is nothing to ground that score in (see PROJECT_MANAGER.md).
+    academic_score: NonNegativeFloat | None = Field(default=None, le=100)
+    domain_alignment_score: NonNegativeFloat | None = Field(default=None, le=100)
+    professional_presence_score: NonNegativeFloat | None = Field(default=None, le=100)
+    engineering_score: NonNegativeFloat | None = Field(default=None, le=100)
+    coding_assessment_score: NonNegativeFloat | None = Field(default=None, le=100)
 
 
 class SpecialistReport(BaseModel):
