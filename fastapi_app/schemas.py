@@ -74,6 +74,44 @@ class SpecialistReport(BaseModel):
     score: NonNegativeFloat | None = Field(default=None, le=100)
 
 
+class GithubScores(BaseModel):
+    """The 5 GitHub-specific dimensions the Portal's github_reports table
+    expects (github_score/repo_quality_score/consistency_score/
+    contribution_score/collaboration_score/open_source_score) — kept as its
+    own schema, not added to SpecialistReport, because those 5 fields only
+    make sense for GitHub; every other source uses the generic `score`.
+    Ported from empowered-ai-service/src/services/github.service.ts's
+    SCHEMA, the working reference for this exact shape."""
+
+    model_config = ConfigDict(extra="forbid")
+    github_score: NonNegativeFloat = Field(le=100)
+    repo_quality_score: NonNegativeFloat = Field(le=100)
+    consistency_score: NonNegativeFloat = Field(le=100)
+    contribution_score: NonNegativeFloat = Field(le=100)
+    collaboration_score: NonNegativeFloat = Field(le=100)
+    open_source_score: NonNegativeFloat = Field(le=100)
+    summary: str = Field(default="", max_length=5000)
+    strengths: list[str] = Field(default_factory=list, max_length=20)
+    risks: list[str] = Field(default_factory=list, max_length=20)
+    recommendations: list[str] = Field(default_factory=list, max_length=20)
+
+
+class LeetcodeScores(BaseModel):
+    """Ported from src/services/leetcode.service.ts's SCHEMA — the 5
+    dimensions the Portal's leetcode_reports table expects."""
+
+    model_config = ConfigDict(extra="forbid")
+    leetcode_score: NonNegativeFloat = Field(le=100)
+    problem_solving_score: NonNegativeFloat = Field(le=100)
+    contest_score: NonNegativeFloat = Field(le=100)
+    consistency_score: NonNegativeFloat = Field(le=100)
+    dsa_depth_score: NonNegativeFloat = Field(le=100)
+    summary: str = Field(default="", max_length=5000)
+    strengths: list[str] = Field(default_factory=list, max_length=20)
+    risks: list[str] = Field(default_factory=list, max_length=20)
+    recommendations: list[str] = Field(default_factory=list, max_length=20)
+
+
 class ExamVerdict(BaseModel):
     model_config = ConfigDict(extra="forbid")
     verdict: str = Field(default="", max_length=3000)

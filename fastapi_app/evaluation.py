@@ -8,7 +8,38 @@ import httpx
 from openai import OpenAI
 
 from .config import settings
-from .schemas import CandidateDossier, CandidateEvaluationRequest, ExamEvaluationRequest, ExamVerdict, SpecialistReport, VerificationFlag
+from .schemas import (
+    CandidateDossier,
+    CandidateEvaluationRequest,
+    ExamEvaluationRequest,
+    ExamVerdict,
+    GithubScores,
+    LeetcodeScores,
+    SpecialistReport,
+    VerificationFlag,
+)
+
+# LEETCODE_QUERY / github_report()'s two-endpoint fetch are ported from
+# empowered-ai-service/src/services/{leetcode,github}.service.ts — the
+# older, retired TypeScript implementation. Both had working, real
+# integrations (LeetCode's public GraphQL API needs no auth; GitHub's
+# REST API was already partially used here) that fastapi_app never had;
+# porting them is why src/ is safe to delete rather than merely thin.
+LEETCODE_QUERY = """
+query userStats($username: String!) {
+  matchedUser(username: $username) {
+    username
+    profile { ranking reputation }
+    submitStats {
+      acSubmissionNum { difficulty count }
+    }
+  }
+  userContestRanking(username: $username) {
+    rating
+    globalRanking
+    attendedContestsCount
+  }
+}"""
 
 
 def _client() -> OpenAI:
@@ -124,18 +155,79 @@ async def github_report(username: str | None) -> dict:
     }
 
 
+async def leetcode_report(username: str | None) -> dict:
+    if not username:
+        return _unavailable("LeetCode", "username not supplied")
+    try:
+        async with httpx.AsyncClient(timeout=settings().request_timeout_seconds) as client:
+            response = await client.post(
+                "https://leetcode.com/graphql",
+                headers={"content-type": "application/json"},
+                json={"query": LEETCODE_QUERY, "variables": {"username": username}},
+            )
+            response.raise_for_status()
+            data = response.json().get("data") or {}
+    except Exception:
+        return _unavailable("LeetCode", "source lookup failed")
+
+    matched_user = data.get("matchedUser")
+    if not matched_user:
+        return _unavailable("LeetCode", f"user '{username}' was not found")
+
+    profile = matched_user.get("profile") or {}
+    solved = (matched_user.get("submitStats") or {}).get("acSubmissionNum") or []
+    contest = data.get("userContestRanking")
+
+    return {
+        "source_status": "verified",
+        "_leetcode_grounding": {
+            "ranking": profile.get("ranking"),
+            "reputation": profile.get("reputation"),
+            "problems_solved_by_difficulty": solved,
+            "contest": contest,
+        },
+    }
+
+
 async def specialist_reports(request: CandidateEvaluationRequest) -> dict[str, dict]:
     github, linkedin, leetcode = await asyncio.gather(
         github_report(request.github),
         asyncio.sleep(0, result=_unavailable("LinkedIn", "no approved read API configured")),
-        asyncio.sleep(0, result=_unavailable("LeetCode", "source adapter unavailable")),
+        leetcode_report(request.leetcode),
     )
     reports = {"github": github, "linkedin": linkedin, "leetcode": leetcode}
     reports["resume"] = _unavailable("Résumé", "resumeText not supplied") if not request.resumeText else {"source_status": "verified", "summary": request.resumeText[:3000], "strengths": [], "risks": [], "recommendations": [], "score": None}
     return reports
 
 
-def _json_completion(system: str, user: str, schema: type[CandidateDossier] | type[ExamVerdict] | type[SpecialistReport], model: str):
+def _score_dimensions(source_name: str, grounding: dict, schema: type[GithubScores] | type[LeetcodeScores], model: str) -> dict:
+    """Runs the dedicated per-dimension scoring call for GitHub/LeetCode —
+    the pattern src/services/{github,leetcode}.service.ts used (a narrow
+    schema of just that source's own score fields, not the generic
+    SpecialistReport every other source shares). Returns a fallback
+    all-null dict (source_status 'partial') on any scoring failure rather
+    than raising, so one flaky LLM call doesn't fail the whole evaluation."""
+    try:
+        scored = _json_completion(
+            f"You are a technical recruiter analyzing a {source_name} profile for a candidate "
+            "onboarding pipeline. Score 0-100 for each dimension. Be concise and factual, "
+            "grounded only in the data given.",
+            json.dumps(grounding, default=str),
+            schema,
+            model,
+        )
+        return {"source_status": "verified", **scored.model_dump()}
+    except Exception as err:
+        null_fields = {k: None for k in schema.model_fields if k not in {"summary", "strengths", "risks", "recommendations"}}
+        return {
+            "source_status": "partial",
+            "summary": f"{source_name} profile fetched but AI scoring failed: {err}",
+            "strengths": [], "risks": [], "recommendations": [],
+            **null_fields,
+        }
+
+
+def _one_completion(system: str, user: str, schema: type, model: str):
     response = _client().responses.create(
         model=model,
         input=[{"role": "system", "content": system}, {"role": "user", "content": user}],
@@ -163,21 +255,71 @@ def _json_completion(system: str, user: str, schema: type[CandidateDossier] | ty
     return schema.model_validate_json(text)
 
 
+def _json_completion(
+    system: str,
+    user: str,
+    schema: type[CandidateDossier] | type[ExamVerdict] | type[SpecialistReport] | type[GithubScores] | type[LeetcodeScores],
+    model: str,
+):
+    try:
+        return _one_completion(system, user, schema, model)
+    except Exception as primary_error:
+        fallback = settings().openai_fallback_model
+        # Only worth a second attempt if the fallback is actually a
+        # different model — retrying the same model that just failed
+        # structured-output compliance isn't a retry strategy, it's just
+        # re-asking the same non-compliant model. Celery's own
+        # retry/backoff (see tasks.py) already covers transient failures
+        # (timeouts, rate limits) for the whole task; this is specifically
+        # for "the model didn't honor the schema," a different failure class.
+        if fallback == model:
+            raise
+        return _one_completion(system, user, schema, fallback)
+
+
 async def evaluate_candidate(request: CandidateEvaluationRequest) -> dict:
     if settings().ai_provider == "fake":
         return {"run_id": request.runId or hashlib.sha256(request.candidateId.encode()).hexdigest()[:24], "candidate_id": request.candidateId, **_fake_candidate(request), "source_reports": {}}
     reports = await specialist_reports(request)
-    # github_report() already computed real, deterministic GitHub stats
-    # (public_repos, total_stars, top_languages, etc.) — the enrichment step
-    # below re-generates reports[name] from the generic SpecialistReport
-    # schema (which only has source_status/summary/strengths/risks/
-    # recommendations/score), so without this it would silently discard
-    # those stats. Captured here, re-merged after enrichment.
-    _github_stats = {
-        k: v for k, v in reports.get("github", {}).items()
-        if k not in {"source_status", "summary", "strengths", "risks", "recommendations", "score", "handle_invalid"}
-    }
-    enrichable = [name for name, report in reports.items() if report.get("source_status") == "verified"]
+
+    # GitHub and LeetCode get their own dedicated 5-dimension scoring call
+    # (mirroring the retired src/services/{github,leetcode}.service.ts) —
+    # they're excluded from the generic SpecialistReport enrichment pass
+    # below so they aren't scored twice (once narrowly, once generically)
+    # and so the deterministic stats github_report() already computed
+    # can't be clobbered by a schema that has no room for them.
+    if reports.get("github", {}).get("source_status") == "verified":
+        github_stats = {
+            k: v for k, v in reports["github"].items()
+            if k not in {"source_status", "summary", "strengths", "risks", "recommendations", "score"}
+        }
+        grounding = {
+            "public_repos": reports["github"].get("public_repos"),
+            "followers": reports["github"].get("followers"),
+            "following": reports["github"].get("following"),
+            "aggregate_stats": {
+                "total_stars": reports["github"].get("total_stars"),
+                "total_forks": reports["github"].get("total_forks"),
+                "languages_count": reports["github"].get("languages_count"),
+                "top_languages": reports["github"].get("top_languages"),
+                "recent_pushes_count": reports["github"].get("recent_pushes_count"),
+            },
+            "top_repositories": reports["github"].get("top_repositories"),
+        }
+        scored = await asyncio.to_thread(_score_dimensions, "GitHub", grounding, GithubScores, settings().openai_specialist_model)
+        reports["github"] = {**scored, **github_stats}  # deterministic stats always win over anything the model might echo back
+
+    if reports.get("leetcode", {}).get("source_status") == "verified":
+        grounding = reports["leetcode"].pop("_leetcode_grounding", {})
+        reports["leetcode"] = await asyncio.to_thread(_score_dimensions, "LeetCode", grounding, LeetcodeScores, settings().openai_specialist_model)
+
+    # Only linkedin/resume go through the generic pass now (linkedin is
+    # always 'unavailable' by design, so this is effectively resume-only —
+    # see PROJECT_MANAGER.md §9 for why linkedin has no dedicated path).
+    enrichable = [
+        name for name, report in reports.items()
+        if name not in {"github", "leetcode"} and report.get("source_status") == "verified"
+    ]
     if enrichable:
         enriched = await asyncio.gather(*[
             asyncio.to_thread(
@@ -189,13 +331,6 @@ async def evaluate_candidate(request: CandidateEvaluationRequest) -> dict:
             ) for name in enrichable
         ])
         reports.update({name: report.model_dump() for name, report in zip(enrichable, enriched)})
-    if "github" in reports and _github_stats:
-        # The Portal's github_reports table reads `github_score`, not the
-        # generic SpecialistReport `score` field the enrichment step above
-        # fills in — rename here rather than adding a duplicate field to a
-        # schema shared by every other source.
-        reports["github"]["github_score"] = reports["github"].pop("score", None)
-        reports["github"].update(_github_stats)
     dossier = _json_completion(
         "Return only JSON matching the requested dossier schema. Ground claims in the supplied "
         "reports; mark unavailable sources as unavailable.\n\n"
