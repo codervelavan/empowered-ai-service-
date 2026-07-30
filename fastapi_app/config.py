@@ -26,6 +26,12 @@ class Settings(BaseSettings):
     # failure mode the n8n pipeline this replaces used to hit.
     openai_specialist_model: str = "gpt-4o-mini"
     openai_consolidation_model: str = "gpt-4o-mini"
+    # Retried once, only on a structured-output compliance failure (the
+    # primary model returned prose, or wrapped valid JSON in something
+    # _json_completion's markdown-fence strip couldn't fix) — not a general
+    # retry-on-any-error path, since Celery's own retry/backoff already
+    # covers transient failures. See evaluation.py's _json_completion.
+    openai_fallback_model: str = "gpt-4o-mini"
     redis_url: str = "redis://redis:6379/0"
     github_token: str = ""
     request_timeout_seconds: float = 15.0
