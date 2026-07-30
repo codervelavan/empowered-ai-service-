@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fastapi:
+    name: fastapi_app — compile · import-check
+    runs-on: ubuntu-latest
+    # Only fastapi_app/ is gated — that's the live implementation. src/ (the
+    # older TS service) is slated for retirement, not gated here, so CI
+    # minutes aren't spent maintaining a tree that's being deleted.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12' # matches Dockerfile.fastapi
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements-fastapi.txt
+
+      - name: Compile check
+        run: python -m compileall -q fastapi_app
+
+      # Confirms the app object actually imports cleanly (catches missing
+      # deps / broken imports that compileall's syntax-only check would
+      # miss) — provide throwaway settings so import-time config validation
+      # doesn't fail on missing secrets.
+      - name: Import check
+        run: python -c "import fastapi_app.main"
+        env:
+          AI_PROVIDER: fake
+          SERVICE_AUTH_TOKEN: ci-placeholder
+          PORTAL_AUTH_TOKEN: ci-placeholder
+          FRAPPE_AUTH_TOKEN: ci-placeholder
+          REDIS_URL: redis://localhost:6379/0
