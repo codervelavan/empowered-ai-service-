@@ -9,7 +9,21 @@ from celery import Celery, Task
 from .config import settings
 
 celery_app = Celery("empowered_ai", broker=settings().redis_url, backend=settings().redis_url)
-celery_app.conf.update(task_acks_late=True, task_reject_on_worker_lost=True, task_track_started=True, broker_connection_retry_on_startup=True)
+celery_app.conf.update(
+    task_acks_late=True,
+    task_reject_on_worker_lost=True,
+    task_track_started=True,
+    broker_connection_retry_on_startup=True,
+    # A single evaluation makes several sequential external HTTP + LLM calls
+    # (GitHub, LeetCode, multiple OpenAI completions). Without a hard limit,
+    # one hung call blocks the worker process indefinitely -- a real risk on
+    # a small cloud instance with few worker processes.
+    task_time_limit=180,
+    task_soft_time_limit=150,
+    # Default prefetch (4) lets a worker grab more tasks than it can run
+    # concurrently, delaying other candidates' evaluations behind a slow one.
+    worker_prefetch_multiplier=1,
+)
 
 
 def _post_to_portal(result: dict) -> None:

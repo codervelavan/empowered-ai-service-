@@ -67,7 +67,7 @@ class SpecialistReport(BaseModel):
     # isn't a member -- every enriched specialist report failed
     # ai_evaluation_reports' enum constraint until this was caught live.
     source_status: Literal["verified", "partial", "unavailable"]
-    summary: str = Field(default="", max_length=5000)
+    summary: str = Field(default="", max_length=800)
     strengths: list[str] = Field(default_factory=list, max_length=20)
     risks: list[str] = Field(default_factory=list, max_length=20)
     recommendations: list[str] = Field(default_factory=list, max_length=20)

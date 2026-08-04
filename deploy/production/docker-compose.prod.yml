@@ -1,0 +1,46 @@
+# Production deploy — modelled on empowered/deploy/production/docker-compose.prod.yml
+# with one deliberate difference: no bundled `redis` service. Point REDIS_URL
+# in .env.production at an external managed Redis (ElastiCache/Memorystore/
+# Upstash/etc.) — its own persistence/failover, not this repo's problem.
+# docker-compose.fastapi.yml's bundled Redis is a dev/demo convenience only.
+services:
+  api:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.fastapi
+    env_file: .env.production
+    # Not published to the host directly — nginx (the Portal's own reverse
+    # proxy, or a separate one fronting this service) proxies to it over the
+    # docker network. Loopback-only as defense in depth regardless.
+    ports:
+      - "127.0.0.1:8000:8000"
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 768M
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.fastapi
+    env_file: .env.production
+    command: ["celery", "-A", "fastapi_app.tasks.celery_app", "worker", "--loglevel=INFO"]
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G

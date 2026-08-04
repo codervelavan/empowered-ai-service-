@@ -43,7 +43,7 @@ query userStats($username: String!) {
 
 
 def _client() -> OpenAI:
-    return OpenAI(api_key=settings().openai_api_key)
+    return OpenAI(api_key=settings().openai_api_key, base_url=settings().openai_base_url or None)
 
 
 def _fake_candidate(request: CandidateEvaluationRequest) -> dict:
@@ -258,7 +258,7 @@ def _one_completion(system: str, user: str, schema: type, model: str):
 def _json_completion(
     system: str,
     user: str,
-    schema: type[CandidateDossier] | type[ExamVerdict] | type[SpecialistReport] | type[GithubScores] | type[LeetcodeScores],
+    schema: type[CandidateDossier] | type[ExamVerdict] | type[SpecialistReport] | type[GithubScores] | type[LeetcodeScores] | type,
     model: str,
 ):
     try:
@@ -324,7 +324,10 @@ async def evaluate_candidate(request: CandidateEvaluationRequest) -> dict:
         enriched = await asyncio.gather(*[
             asyncio.to_thread(
                 _json_completion,
-                "Return only a grounded source report. Do not infer facts not present in the source data.",
+                "Return a grounded source report. If summarizing a résumé, write a concise "
+                "2-4 sentence synthesis of the candidate's background, key skills, and standout "
+                "projects -- never reproduce the source text verbatim or at length. Do not infer "
+                "facts not present in the source data.",
                 json.dumps({"source": name, "report": reports[name]}, default=str),
                 SpecialistReport,
                 settings().openai_specialist_model,
